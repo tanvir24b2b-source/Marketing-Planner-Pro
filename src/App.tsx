@@ -53,7 +53,6 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { GoogleGenAI } from "@google/genai";
 import Papa from 'papaparse';
 import { toast, Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth, UserProfile, Role } from './lib/auth';
@@ -81,10 +80,6 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
-
-// Initialize Gemini
-const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-const ai = geminiKey ? new GoogleGenAI({ apiKey: geminiKey }) : null;
 
 // Test Firestore Connection
 async function testConnection() {
@@ -271,6 +266,34 @@ const SidebarItem = ({
 );
 
 export default function App() {
+  const isConfigured = !!(
+    import.meta.env.VITE_FIREBASE_API_KEY || 
+    "AIzaSyCAgODUn4Pc5kZo1KZ9F1SP84rRcK_Dphg"
+  );
+
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="max-w-md w-full bg-white p-8 rounded-xl shadow-lg border border-red-100 text-center">
+          <ShieldAlert className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Configuration Required</h2>
+          <p className="text-gray-600 mb-6">
+            Firebase environment variables are missing. Please add them to your Vercel/GitHub settings.
+          </p>
+          <div className="text-left bg-gray-50 p-4 rounded-lg text-xs font-mono text-gray-500 overflow-auto">
+            VITE_FIREBASE_API_KEY<br/>
+            VITE_FIREBASE_AUTH_DOMAIN<br/>
+            VITE_FIREBASE_PROJECT_ID<br/>
+            VITE_FIREBASE_STORAGE_BUCKET<br/>
+            VITE_FIREBASE_MESSAGING_SENDER_ID<br/>
+            VITE_FIREBASE_APP_ID<br/>
+            VITE_FIREBASE_DATABASE_ID
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ErrorBoundary>
       <AuthProvider>
@@ -736,28 +759,9 @@ function AppContent() {
         return noEmbedData.thumbnail_url;
       }
     } catch (e) {
-      console.warn("NoEmbed fetch failed, falling back to Gemini.");
+      console.warn("NoEmbed fetch failed.");
     }
 
-    // Try to get thumbnail using Gemini for Facebook/TikTok/Instagram
-    if (!ai) return undefined;
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Find the primary thumbnail image URL (og:image) for this video link: ${url}. 
-        Return ONLY the raw URL string. If not found, return 'none'. 
-        If it's a Facebook or Instagram link, try to find the actual image content URL.`,
-        config: {
-          tools: [{urlContext: {}}]
-        },
-      });
-      const thumbUrl = response.text?.trim();
-      if (thumbUrl && thumbUrl !== 'none' && thumbUrl.startsWith('http')) {
-        return thumbUrl;
-      }
-    } catch (error) {
-      console.error("Error fetching thumbnail:", error);
-    }
     return undefined;
   };
 
@@ -942,103 +946,6 @@ function AppContent() {
     setIsAddModalOpen(false);
     setEditingProductId(null);
     setNewProduct({ name: '', buyingPrice: '', sellingPrice: '', websiteLink: '' });
-  };
-
-  const generateAdCopy = async (ad: AdProduct) => {
-    if (!ai) {
-      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
-      return;
-    }
-    const product = products.find(p => p.id === ad.productId);
-    if (!product) return;
-
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Generate high-converting Facebook/TikTok ad copy for this product:
-        Name: ${product.name}
-        Price: ৳${product.sellingPrice}
-        Platform: ${ad.platform}
-        
-        The copy should be in Banglish (Bengali written in English script) and include:
-        1. Hook (Attention grabber)
-        2. Problem (The pain point)
-        3. Solution (How this product helps)
-        4. CTA (Order link: ${product.websiteLink})
-        
-        Output format: JSON with keys "hook", "problem", "solution", "cta".`,
-        config: { responseMimeType: "application/json" }
-      });
-      
-      const copy = JSON.parse(response.text || '{}');
-      const formattedCopy = `${copy.hook}\n\n${copy.problem}\n\n${copy.solution}\n\n${copy.cta}`;
-      
-      // Add as a note
-      await handleAddNote(ad.id); // This is a bit hacky, let's just update the state or show a modal
-      alert("AI Ad Copy Generated! Check console for now.");
-      console.log(formattedCopy);
-    } catch (error) {
-      console.error("Error generating ad copy:", error);
-    }
-  };
-
-  const generateWhatsAppMessage = async (product: Product) => {
-    if (!ai) {
-      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
-      return;
-    }
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Generate a short, friendly WhatsApp marketing message for:
-        Product: ${product.name}
-        Price: ৳${product.sellingPrice}
-        Link: ${product.websiteLink}
-        
-        Language: Bengali (Bangla script)
-        Tone: Professional yet friendly.
-        Include emojis.`,
-      });
-      
-      const msg = response.text?.trim();
-      alert("AI WhatsApp Message Generated!\n\n" + msg);
-    } catch (error) {
-      console.error("Error generating WhatsApp message:", error);
-    }
-  };
-
-  const fetchProductInfo = async () => {
-    if (!newProduct.websiteLink) return;
-    if (!ai) {
-      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
-      return;
-    }
-    setIsFetching(true);
-    try {
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Extract the actual product name and the current selling price (sale price) visible on this website: ${newProduct.websiteLink}. 
-        Do not guess. If you cannot find the price, return 0 for sellingPrice.
-        Return ONLY a JSON object with keys "name" (string) and "sellingPrice" (number).`,
-        config: { 
-          responseMimeType: "application/json",
-          tools: [{ urlContext: {} }]
-        }
-      });
-      
-      const data = JSON.parse(response.text || '{}');
-      if (data.name || data.sellingPrice) {
-        setNewProduct(prev => ({
-          ...prev,
-          name: data.name || prev.name,
-          sellingPrice: data.sellingPrice > 0 ? data.sellingPrice.toString() : prev.sellingPrice
-        }));
-      }
-    } catch (error) {
-      console.error("Error fetching product info:", error);
-    } finally {
-      setIsFetching(false);
-    }
   };
 
   return (
@@ -2679,23 +2586,13 @@ function AppContent() {
                 {/* Website Link */}
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">Product Website Link</label>
-                  <div className="flex gap-2">
-                    <input 
-                      type="url"
-                      placeholder="https://example.com/product"
-                      className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                      value={newProduct.websiteLink}
-                      onChange={(e) => setNewProduct({...newProduct, websiteLink: e.target.value})}
-                    />
-                    <button 
-                      onClick={fetchProductInfo}
-                      disabled={isFetching || !newProduct.websiteLink}
-                      className="px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-600 font-medium hover:bg-gray-50 flex items-center gap-2 transition-colors disabled:opacity-50"
-                    >
-                      {isFetching ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} className="text-blue-500" />}
-                      Fetch Info
-                    </button>
-                  </div>
+                  <input 
+                    type="url"
+                    placeholder="https://example.com/product"
+                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                    value={newProduct.websiteLink}
+                    onChange={(e) => setNewProduct({...newProduct, websiteLink: e.target.value})}
+                  />
                 </div>
               </div>
 
