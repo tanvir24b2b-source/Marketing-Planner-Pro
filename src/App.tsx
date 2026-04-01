@@ -53,6 +53,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
 import Papa from 'papaparse';
 import { toast, Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth, UserProfile, Role } from './lib/auth';
@@ -80,6 +81,9 @@ import { twMerge } from 'tailwind-merge';
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
+
+// Initialize Gemini
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Test Firestore Connection
 async function testConnection() {
@@ -266,34 +270,6 @@ const SidebarItem = ({
 );
 
 export default function App() {
-  const isConfigured = !!(
-    import.meta.env.VITE_FIREBASE_API_KEY || 
-    "AIzaSyCAgODUn4Pc5kZo1KZ9F1SP84rRcK_Dphg"
-  );
-
-  if (!isConfigured) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
-        <div className="max-w-md w-full bg-white p-8 rounded-xl shadow-lg border border-red-100 text-center">
-          <ShieldAlert className="w-16 h-16 text-red-500 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Configuration Required</h2>
-          <p className="text-gray-600 mb-6">
-            Firebase environment variables are missing. Please add them to your Vercel/GitHub settings.
-          </p>
-          <div className="text-left bg-gray-50 p-4 rounded-lg text-xs font-mono text-gray-500 overflow-auto">
-            VITE_FIREBASE_API_KEY<br/>
-            VITE_FIREBASE_AUTH_DOMAIN<br/>
-            VITE_FIREBASE_PROJECT_ID<br/>
-            VITE_FIREBASE_STORAGE_BUCKET<br/>
-            VITE_FIREBASE_MESSAGING_SENDER_ID<br/>
-            VITE_FIREBASE_APP_ID<br/>
-            VITE_FIREBASE_DATABASE_ID
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <ErrorBoundary>
       <AuthProvider>
@@ -306,7 +282,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { profile, role, logout, updateMyProfile, changeMyPassword, adminCreateUser } = useAuth();
+  const { profile, role, deviceId } = useAuth();
   const user = profile;
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'products' | 'content-plan' | 'ads-plan' | 'settings'>('dashboard');
@@ -328,65 +304,6 @@ function AppContent() {
   const [expandedAdId, setExpandedAdId] = useState<string | null>(null);
   const [newVideoUrl, setNewVideoUrl] = useState('');
   const [newNoteText, setNewNoteText] = useState('');
-
-  const [profileForm, setProfileForm] = useState({
-    name: '',
-    password: '',
-    confirmPassword: ''
-  });
-
-  useEffect(() => {
-    if (profile) {
-      setProfileForm(prev => ({ ...prev, name: profile.name }));
-    }
-  }, [profile]);
-
-  const handleProfileImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 1024 * 1024) {
-      toast.error('Image size should be less than 1MB');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64String = reader.result as string;
-      try {
-        await updateMyProfile({ profileImage: base64String });
-        toast.success('Profile picture updated');
-      } catch (error) {
-        toast.error('Failed to update profile picture');
-      }
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleUpdateProfile = async () => {
-    try {
-      if (profileForm.name !== profile?.name) {
-        await updateMyProfile({ name: profileForm.name });
-        toast.success('Name updated');
-      }
-
-      if (profileForm.password) {
-        if (profileForm.password !== profileForm.confirmPassword) {
-          toast.error('Passwords do not match');
-          return;
-        }
-        if (profileForm.password.length < 6) {
-          toast.error('Password must be at least 6 characters');
-          return;
-        }
-        await changeMyPassword(profileForm.password);
-        toast.success('Password updated');
-        setProfileForm(prev => ({ ...prev, password: '', confirmPassword: '' }));
-      }
-    } catch (error: any) {
-      toast.error(error.message || 'Failed to update profile');
-    }
-  };
 
   // Firestore Subscriptions
   useEffect(() => {
@@ -440,55 +357,34 @@ function AppContent() {
 
   const handleSaveUser = async (userData: any) => {
     try {
-      const { email, password, name, roleId, id } = userData;
-
-      if (id) {
-        if (!name || !roleId) {
-          toast.error('Name and Role are required');
-          return;
-        }
-        await updateDoc(doc(db, 'users', id), {
-          name,
-          roleId,
+      if (editingUser) {
+        await updateDoc(doc(db, 'users', editingUser.id), {
+          ...userData,
           updatedAt: serverTimestamp()
         });
         toast.success('User updated successfully');
       } else {
-        // Robust validation for new user creation
-        if (!email || typeof email !== 'string' || email.trim() === '') {
-          toast.error('Valid email is required');
-          return;
-        }
-        if (!password || typeof password !== 'string' || password.length < 6) {
-          toast.error('Password must be at least 6 characters');
-          return;
-        }
-        if (!name || typeof name !== 'string' || name.trim() === '') {
-          toast.error('Name is required');
-          return;
-        }
-        if (!roleId) {
-          toast.error('Role is required');
-          return;
-        }
-
-        await adminCreateUser(email.trim(), password, name.trim(), roleId);
+        await addDoc(collection(db, 'users'), {
+          ...userData,
+          status: 'active',
+          trustedDevices: [],
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
         toast.success('User created successfully');
       }
       setIsUserModalOpen(false);
       setEditingUser(null);
-    } catch (error: any) {
-      console.error('Error saving user:', error);
-      toast.error(error.message || 'Failed to save user');
+    } catch (error) {
+      handleFirestoreError(error, OperationType.WRITE, 'users');
     }
   };
 
   const handleSaveRole = async (roleData: any) => {
     try {
-      if (roleData.id) {
-        const { id, ...data } = roleData;
-        await updateDoc(doc(db, 'roles', id), {
-          ...data,
+      if (editingRole) {
+        await updateDoc(doc(db, 'roles', editingRole.id), {
+          ...roleData,
           updatedAt: serverTimestamp()
         });
         toast.success('Role updated successfully');
@@ -759,9 +655,27 @@ function AppContent() {
         return noEmbedData.thumbnail_url;
       }
     } catch (e) {
-      console.warn("NoEmbed fetch failed.");
+      console.warn("NoEmbed fetch failed, falling back to Gemini.");
     }
 
+    // Try to get thumbnail using Gemini for Facebook/TikTok/Instagram
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Find the primary thumbnail image URL (og:image) for this video link: ${url}. 
+        Return ONLY the raw URL string. If not found, return 'none'. 
+        If it's a Facebook or Instagram link, try to find the actual image content URL.`,
+        config: {
+          tools: [{urlContext: {}}]
+        },
+      });
+      const thumbUrl = response.text?.trim();
+      if (thumbUrl && thumbUrl !== 'none' && thumbUrl.startsWith('http')) {
+        return thumbUrl;
+      }
+    } catch (error) {
+      console.error("Error fetching thumbnail:", error);
+    }
     return undefined;
   };
 
@@ -948,6 +862,91 @@ function AppContent() {
     setNewProduct({ name: '', buyingPrice: '', sellingPrice: '', websiteLink: '' });
   };
 
+  const generateAdCopy = async (ad: AdProduct) => {
+    const product = products.find(p => p.id === ad.productId);
+    if (!product) return;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Generate high-converting Facebook/TikTok ad copy for this product:
+        Name: ${product.name}
+        Price: ৳${product.sellingPrice}
+        Platform: ${ad.platform}
+        
+        The copy should be in Banglish (Bengali written in English script) and include:
+        1. Hook (Attention grabber)
+        2. Problem (The pain point)
+        3. Solution (How this product helps)
+        4. CTA (Order link: ${product.websiteLink})
+        
+        Output format: JSON with keys "hook", "problem", "solution", "cta".`,
+        config: { responseMimeType: "application/json" }
+      });
+      
+      const copy = JSON.parse(response.text || '{}');
+      const formattedCopy = `${copy.hook}\n\n${copy.problem}\n\n${copy.solution}\n\n${copy.cta}`;
+      
+      // Add as a note
+      await handleAddNote(ad.id); // This is a bit hacky, let's just update the state or show a modal
+      alert("AI Ad Copy Generated! Check console for now.");
+      console.log(formattedCopy);
+    } catch (error) {
+      console.error("Error generating ad copy:", error);
+    }
+  };
+
+  const generateWhatsAppMessage = async (product: Product) => {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Generate a short, friendly WhatsApp marketing message for:
+        Product: ${product.name}
+        Price: ৳${product.sellingPrice}
+        Link: ${product.websiteLink}
+        
+        Language: Bengali (Bangla script)
+        Tone: Professional yet friendly.
+        Include emojis.`,
+      });
+      
+      const msg = response.text?.trim();
+      alert("AI WhatsApp Message Generated!\n\n" + msg);
+    } catch (error) {
+      console.error("Error generating WhatsApp message:", error);
+    }
+  };
+
+  const fetchProductInfo = async () => {
+    if (!newProduct.websiteLink) return;
+    setIsFetching(true);
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: `Extract the actual product name and the current selling price (sale price) visible on this website: ${newProduct.websiteLink}. 
+        Do not guess. If you cannot find the price, return 0 for sellingPrice.
+        Return ONLY a JSON object with keys "name" (string) and "sellingPrice" (number).`,
+        config: { 
+          responseMimeType: "application/json",
+          tools: [{ urlContext: {} }]
+        }
+      });
+      
+      const data = JSON.parse(response.text || '{}');
+      if (data.name || data.sellingPrice) {
+        setNewProduct(prev => ({
+          ...prev,
+          name: data.name || prev.name,
+          sellingPrice: data.sellingPrice > 0 ? data.sellingPrice.toString() : prev.sellingPrice
+        }));
+      }
+    } catch (error) {
+      console.error("Error fetching product info:", error);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+
   return (
     <div className="flex h-screen bg-[#F8F9FB] font-sans text-gray-900 relative">
       {/* Mobile Backdrop */}
@@ -976,71 +975,44 @@ function AppContent() {
               isOpen={isSidebarOpen}
               onClick={() => setActiveTab('dashboard')}
             />
-            <PermissionGuard permission="viewProducts">
-              <SidebarItem 
-                icon={<Package size={20} />} 
-                label="Products" 
-                active={activeTab === 'products'} 
-                isOpen={isSidebarOpen}
-                onClick={() => setActiveTab('products')}
-              />
-            </PermissionGuard>
-            <PermissionGuard permission="viewContentPlan">
-              <SidebarItem 
-                icon={<FileText size={20} />} 
-                label="Content Plan" 
-                active={activeTab === 'content-plan'}
-                isOpen={isSidebarOpen} 
-                onClick={() => setActiveTab('content-plan')} 
-              />
-            </PermissionGuard>
-            <PermissionGuard permission="viewAdsPlan">
-              <SidebarItem 
-                icon={<Megaphone size={20} />} 
-                label="Ads Plan" 
-                active={activeTab === 'ads-plan'}
-                isOpen={isSidebarOpen} 
-                onClick={() => setActiveTab('ads-plan')} 
-              />
-            </PermissionGuard>
             <SidebarItem 
-              icon={<Settings size={20} />} 
-              label="Settings" 
-              active={activeTab === 'settings'}
-              isOpen={isSidebarOpen} 
-              onClick={() => setActiveTab('settings')} 
+              icon={<Package size={20} />} 
+              label="Products" 
+              active={activeTab === 'products'} 
+              isOpen={isSidebarOpen}
+              onClick={() => setActiveTab('products')}
             />
+            <SidebarItem 
+              icon={<FileText size={20} />} 
+              label="Content Plan" 
+              active={activeTab === 'content-plan'}
+              isOpen={isSidebarOpen} 
+              onClick={() => setActiveTab('content-plan')} 
+            />
+            <SidebarItem 
+              icon={<Megaphone size={20} />} 
+              label="Ads Plan" 
+              active={activeTab === 'ads-plan'}
+              isOpen={isSidebarOpen} 
+              onClick={() => setActiveTab('ads-plan')} 
+            />
+            <SidebarItem icon={<Settings size={20} />} label="Settings" isOpen={isSidebarOpen} onClick={() => {}} />
           </div>
         </div>
 
         {/* User Profile */}
         <div className="p-4 border-t border-gray-100 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 overflow-hidden">
-              {profile?.profileImage ? (
-                <img src={profile.profileImage} alt="Profile" className="w-full h-full object-cover" />
-              ) : (
-                <UserIcon size={20} />
-              )}
+            <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+              <UserIcon size={20} />
             </div>
             {isSidebarOpen && (
               <div className="flex flex-col">
-                <span className="text-sm font-bold truncate max-w-[120px]">{profile?.name}</span>
-                <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider">
-                  {role?.name}
-                </span>
+                <span className="text-sm font-bold">De Markt</span>
+                <span className="text-xs text-gray-400">Admin</span>
               </div>
             )}
           </div>
-          {isSidebarOpen && (
-            <button 
-              onClick={logout}
-              className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-              title="Logout"
-            >
-              <LogOut size={18} />
-            </button>
-          )}
         </div>
       </aside>
 
@@ -1079,14 +1051,6 @@ function AppContent() {
                     icon={<TrendingUp size={20} />} 
                     color="text-blue-500" 
                   />
-                  <PermissionGuard permission="seeBuyingPrice">
-                    <StatCard 
-                      title="Total Inventory Value" 
-                      value={`৳${products.reduce((acc, p) => acc + (p.buyingPrice || 0), 0).toLocaleString()}`} 
-                      icon={<TrendingUp size={20} />} 
-                      color="text-purple-500" 
-                    />
-                  </PermissionGuard>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
@@ -1259,13 +1223,9 @@ function AppContent() {
                     <thead>
                       <tr className="bg-gray-50 border-b border-gray-200">
                         <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Name</th>
-                        <PermissionGuard permission="seeBuyingPrice">
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Buying Price</th>
-                        </PermissionGuard>
+                        <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Buying Price</th>
                         <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Selling Price</th>
-                        <PermissionGuard permission="seeBuyingPrice">
-                          <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Margin</th>
-                        </PermissionGuard>
+                        <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Margin</th>
                         <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Website</th>
                         <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
                       </tr>
@@ -1287,15 +1247,11 @@ function AppContent() {
                               >
                                 {product.name}
                               </td>
-                              <PermissionGuard permission="seeBuyingPrice">
-                                <td className="px-6 py-4 text-gray-600">৳{product.buyingPrice.toFixed(2)}</td>
-                              </PermissionGuard>
+                              <td className="px-6 py-4 text-gray-600">৳{product.buyingPrice.toFixed(2)}</td>
                               <td className="px-6 py-4 text-gray-600">৳{product.sellingPrice.toFixed(2)}</td>
-                              <PermissionGuard permission="seeBuyingPrice">
-                                <td className="px-6 py-4 font-bold text-green-600">
-                                  ৳{(product.sellingPrice - product.buyingPrice).toFixed(2)}
-                                </td>
-                              </PermissionGuard>
+                              <td className="px-6 py-4 font-bold text-green-600">
+                                ৳{(product.sellingPrice - product.buyingPrice).toFixed(2)}
+                              </td>
                               <td className="px-6 py-4">
                                 {product.websiteLink ? (
                                   <a 
@@ -1335,22 +1291,18 @@ function AppContent() {
                                   >
                                     {/* Price Details */}
                                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                                      <PermissionGuard permission="seeBuyingPrice">
-                                        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-                                          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Buying Price</span>
-                                          <p className="text-xl font-bold text-gray-900">৳{product.buyingPrice.toFixed(2)}</p>
-                                        </div>
-                                      </PermissionGuard>
+                                      <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Buying Price</span>
+                                        <p className="text-xl font-bold text-gray-900">৳{product.buyingPrice.toFixed(2)}</p>
+                                      </div>
                                       <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
                                         <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Selling Price</span>
                                         <p className="text-xl font-bold text-gray-900">৳{product.sellingPrice.toFixed(2)}</p>
                                       </div>
-                                      <PermissionGuard permission="seeBuyingPrice">
-                                        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
-                                          <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Net Margin</span>
-                                          <p className="text-xl font-bold text-green-600">৳{(product.sellingPrice - product.buyingPrice).toFixed(2)}</p>
-                                        </div>
-                                      </PermissionGuard>
+                                      <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm">
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Net Margin</span>
+                                        <p className="text-xl font-bold text-green-600">৳{(product.sellingPrice - product.buyingPrice).toFixed(2)}</p>
+                                      </div>
                                     </div>
                                     
                                     {/* Video Section */}
@@ -1932,319 +1884,221 @@ function AppContent() {
                 </div>
               </div>
             ) : activeTab === 'settings' ? (
-              <div className="space-y-6">
-                <div className="flex flex-col gap-6">
+              <div className="space-y-8">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">Settings</h2>
-                    <p className="text-sm text-gray-500">Manage your profile, team members, and access levels</p>
-                  </div>
-                  
-                  {/* Settings Tabs - Fully Responsive */}
-                  <div className="flex overflow-x-auto scrollbar-hide -mx-4 px-4 sm:mx-0 sm:px-0 pb-2 sm:pb-0">
-                    <div className="flex gap-2 p-1 bg-gray-100/50 rounded-xl border border-gray-200 w-fit whitespace-nowrap">
-                      <button
-                        onClick={() => setSettingsSubTab('profile')}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                          settingsSubTab === 'profile' 
-                            ? "bg-white text-blue-600 shadow-sm border border-gray-200" 
-                            : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                        )}
-                      >
-                        <UserIcon size={16} />
-                        Profile
-                      </button>
-                      <PermissionGuard permission="manageUsers">
-                        <button
-                          onClick={() => setSettingsSubTab('users')}
-                          className={cn(
-                            "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                            settingsSubTab === 'users' 
-                              ? "bg-white text-blue-600 shadow-sm border border-gray-200" 
-                              : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                          )}
-                        >
-                          <Users size={16} />
-                          Users
-                        </button>
-                        <button
-                          onClick={() => setSettingsSubTab('roles')}
-                          className={cn(
-                            "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                            settingsSubTab === 'roles' 
-                              ? "bg-white text-blue-600 shadow-sm border border-gray-200" 
-                              : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                          )}
-                        >
-                          <Shield size={16} />
-                          Roles & Permissions
-                        </button>
-                        <button
-                          onClick={() => setSettingsSubTab('devices')}
-                          className={cn(
-                            "px-4 py-2 rounded-lg text-sm font-bold transition-all flex items-center gap-2",
-                            settingsSubTab === 'devices' 
-                              ? "bg-white text-blue-600 shadow-sm border border-gray-200" 
-                              : "text-gray-500 hover:text-gray-700 hover:bg-white/50"
-                          )}
-                        >
-                          <Smartphone size={16} />
-                          Devices
-                        </button>
-                      </PermissionGuard>
-                    </div>
+                    <h2 className="text-xl sm:text-2xl font-bold">Settings</h2>
+                    <p className="text-xs sm:text-sm text-gray-500">Manage your profile, users, roles, and devices</p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-6">
+                {/* Settings Tabs */}
+                <div className="flex bg-white p-1 rounded-xl border border-gray-200 w-fit overflow-x-auto max-w-full">
+                  {(['profile', 'users', 'roles', 'devices'] as const).map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => setSettingsSubTab(tab)}
+                      className={`px-4 sm:px-6 py-2 rounded-lg text-xs sm:text-sm font-bold capitalize transition-all whitespace-nowrap ${settingsSubTab === tab ? 'bg-blue-600 text-white shadow-md' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
                   {settingsSubTab === 'profile' && (
-                    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                      <div className="p-6 border-b border-gray-100 bg-gray-50/30">
-                        <h3 className="font-bold text-lg text-gray-900">Your Profile</h3>
-                        <p className="text-xs text-gray-500">Manage your personal information and security</p>
+                    <div className="max-w-2xl space-y-6">
+                      <div className="flex items-center gap-6">
+                        <div className="w-24 h-24 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 relative group overflow-hidden">
+                          {user?.profileImage ? (
+                            <img src={user.profileImage} alt="Profile" className="w-full h-full object-cover" />
+                          ) : (
+                            <UserIcon size={40} />
+                          )}
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer">
+                            <Camera size={24} className="text-white" />
+                          </div>
+                        </div>
+                        <div>
+                          <h3 className="font-bold text-lg">{user?.name || 'De Markt User'}</h3>
+                          <p className="text-sm text-gray-500">{user?.email}</p>
+                          <span className="inline-block mt-2 px-3 py-1 bg-blue-50 text-blue-600 text-xs font-bold rounded-full uppercase tracking-wider">
+                            {roles.find(r => r.id === user?.roleId)?.name || 'Admin'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="p-6 space-y-8">
-                        <div className="flex flex-col sm:flex-row items-center gap-6">
-                          <div className="relative group">
-                            <div className="w-24 h-24 rounded-3xl bg-blue-50 flex items-center justify-center text-blue-600 overflow-hidden border-4 border-white shadow-xl ring-1 ring-gray-100">
-                              {profile?.profileImage ? (
-                                <img src={profile.profileImage} alt="Profile" className="w-full h-full object-cover" />
-                              ) : (
-                                <UserIcon size={40} />
-                              )}
-                            </div>
-                            <label className="absolute -bottom-2 -right-2 p-2 bg-blue-600 text-white rounded-xl shadow-lg cursor-pointer hover:bg-blue-700 transition-all hover:scale-110 active:scale-95">
-                              <Camera size={16} />
-                              <input type="file" className="hidden" accept="image/*" onChange={handleProfileImageChange} />
-                            </label>
-                          </div>
-                          <div className="text-center sm:text-left">
-                            <h3 className="font-bold text-xl text-gray-900">{profile?.name}</h3>
-                            <p className="text-sm text-gray-500">{profile?.email}</p>
-                            <div className="flex justify-center sm:justify-start gap-2 mt-2">
-                              <span className="px-3 py-1 bg-blue-50 text-blue-600 text-[10px] font-bold rounded-full uppercase tracking-wider border border-blue-100">
-                                {role?.name}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Full Name</label>
-                            <input 
-                              type="text" 
-                              value={profileForm.name}
-                              onChange={(e) => setProfileForm(prev => ({ ...prev, name: e.target.value }))}
-                              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Email Address</label>
-                            <input 
-                              type="email" 
-                              value={profile?.email || ''}
-                              disabled
-                              className="w-full px-4 py-3 rounded-xl border border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed outline-none font-medium"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">New Password</label>
-                            <input 
-                              type="password" 
-                              placeholder="Leave blank to keep current"
-                              value={profileForm.password}
-                              onChange={(e) => setProfileForm(prev => ({ ...prev, password: e.target.value }))}
-                              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Confirm Password</label>
-                            <input 
-                              type="password" 
-                              placeholder="Confirm new password"
-                              value={profileForm.confirmPassword}
-                              onChange={(e) => setProfileForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
-                              className="w-full px-4 py-3 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
-                            />
-                          </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Full Name</label>
+                          <input 
+                            type="text" 
+                            defaultValue={user?.name}
+                            className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
+                          />
                         </div>
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Email Address</label>
+                          <input 
+                            type="email" 
+                            defaultValue={user?.email}
+                            disabled
+                            className="w-full px-4 py-2.5 rounded-xl border border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed outline-none font-medium"
+                          />
+                        </div>
+                      </div>
 
-                        <div className="pt-4 border-t border-gray-100">
-                          <button 
-                            onClick={handleUpdateProfile}
-                            className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-lg shadow-blue-200 active:scale-95"
-                          >
-                            Save Profile Changes
-                          </button>
-                        </div>
+                      <div className="pt-4">
+                        <button className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-bold transition-all shadow-md">
+                          Save Changes
+                        </button>
                       </div>
                     </div>
                   )}
 
                   {settingsSubTab === 'users' && (
-                    <PermissionGuard permission="manageUsers">
-                      <div className="space-y-6">
-                        {/* Users List Card */}
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                          <div className="p-6 border-b border-gray-100 bg-gray-50/30 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                            <div>
-                              <h3 className="font-bold text-lg text-gray-900">User Management</h3>
-                              <p className="text-xs text-gray-500">Manage team members and their access levels</p>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                setEditingUser({ name: '', email: '', password: '', roleId: '' } as any);
-                                setIsUserModalOpen(true);
-                              }}
-                              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm font-bold transition-all shadow-md active:scale-95"
-                            >
-                              <Plus size={18} />
-                              Add New User
-                            </button>
-                          </div>
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-left border-collapse">
-                              <thead>
-                                <tr className="bg-gray-50/50 border-b border-gray-100">
-                                  <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">User Details</th>
-                                  <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest">Role</th>
-                                  <th className="px-6 py-4 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-right">Actions</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-50">
-                                {users.map((u) => (
-                                  <tr key={u.id} className="hover:bg-gray-50/50 transition-colors group">
-                                    <td className="px-6 py-4">
-                                      <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 text-sm font-bold border border-blue-100">
-                                          {u.profileImage ? (
-                                            <img src={u.profileImage} alt="" className="w-full h-full object-cover rounded-xl" />
-                                          ) : (
-                                            u.name.charAt(0)
-                                          )}
-                                        </div>
-                                        <div>
-                                          <p className="font-bold text-sm text-gray-900">{u.name}</p>
-                                          <p className="text-xs text-gray-400">{u.email}</p>
-                                        </div>
-                                      </div>
-                                    </td>
-                                    <td className="px-6 py-4">
-                                      <span className="px-2.5 py-1 bg-gray-100 text-gray-600 text-[10px] font-bold rounded-lg uppercase tracking-wider border border-gray-200">
-                                        {roles.find(r => r.id === u.roleId)?.name || 'User'}
-                                      </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-right">
-                                      <div className="flex justify-end gap-2">
-                                        <button 
-                                          onClick={() => {
-                                            setEditingUser(u);
-                                            setIsUserModalOpen(true);
-                                          }}
-                                          className="p-2 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                          title="Edit User"
-                                        >
-                                          <Edit2 size={16} />
-                                        </button>
-                                        <button 
-                                          onClick={() => handleDeleteUser(u.id)}
-                                          className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                          title="Delete User"
-                                        >
-                                          <Trash2 size={16} />
-                                        </button>
-                                      </div>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        </div>
+                    <div className="space-y-6">
+                      <div className="flex justify-between items-center">
+                        <h3 className="font-bold text-lg">User Access Control</h3>
+                        <button 
+                          onClick={() => {
+                            setEditingUser(null);
+                            setIsUserModalOpen(true);
+                          }}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors shadow-sm"
+                        >
+                          <Plus size={18} />
+                          Add User
+                        </button>
                       </div>
-                    </PermissionGuard>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse">
+                          <thead>
+                            <tr className="bg-gray-50 border-b border-gray-200">
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">User</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Role</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Status</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider">Devices</th>
+                              <th className="px-6 py-4 text-xs font-bold text-gray-400 uppercase tracking-wider text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {users.map((u) => (
+                              <tr key={u.id} className="hover:bg-gray-50 transition-colors">
+                                <td className="px-6 py-4">
+                                  <div className="flex items-center gap-3">
+                                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-xs font-bold">
+                                      {u.name.charAt(0)}
+                                    </div>
+                                    <div>
+                                      <p className="font-bold text-sm text-gray-900">{u.name}</p>
+                                      <p className="text-xs text-gray-400">{u.email}</p>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="text-sm text-gray-600">
+                                    {roles.find(r => r.id === u.roleId)?.name || 'User'}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                                    u.status === 'active' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                                  }`}>
+                                    {u.status}
+                                  </span>
+                                </td>
+                                <td className="px-6 py-4">
+                                  <span className="text-sm text-gray-600">{u.trustedDevices?.length || 0} Approved</span>
+                                </td>
+                                <td className="px-6 py-4 text-right">
+                                  <div className="flex justify-end gap-3 text-gray-400">
+                                    <button 
+                                      onClick={() => {
+                                        setEditingUser(u);
+                                        setIsUserModalOpen(true);
+                                      }}
+                                      className="hover:text-blue-600 transition-colors"
+                                    >
+                                      <Edit2 size={16} />
+                                    </button>
+                                    <button 
+                                      onClick={() => handleDeleteUser(u.id)}
+                                      className="hover:text-red-600 transition-colors"
+                                    >
+                                      <Trash2 size={16} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   )}
 
                   {settingsSubTab === 'roles' && (
-                    <PermissionGuard permission="manageUsers">
-                      <div className="space-y-6">
-                        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-                          <div className="p-6 border-b border-gray-100 bg-gray-50/30 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-                            <div>
-                              <h3 className="font-bold text-lg text-gray-900">Roles & Permissions</h3>
-                              <p className="text-xs text-gray-500">Define what team members can see and do</p>
-                            </div>
-                            <button 
-                              onClick={() => {
-                                setEditingRole({ name: '', permissions: {
-                                  viewProducts: true,
-                                  seeBuyingPrice: false,
-                                  editProducts: false,
-                                  viewContentPlan: true,
-                                  editContentPlan: false,
-                                  viewAdsPlan: true,
-                                  editAdsPlan: false,
-                                  manageUsers: false
-                                } } as any);
-                                setIsRoleModalOpen(true);
-                              }}
-                              className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-4 py-2.5 rounded-xl flex items-center justify-center gap-2 text-sm font-bold transition-all shadow-md active:scale-95"
-                            >
-                              <Plus size={18} />
-                              Create New Role
-                            </button>
-                          </div>
-                          <div className="p-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                            {roles.map((r) => (
-                              <div key={r.id} className="p-5 border border-gray-100 rounded-2xl bg-gray-50/50 hover:border-blue-200 hover:bg-white transition-all group relative">
-                                <div className="flex justify-between items-start mb-4">
-                                  <div className="p-2 bg-white rounded-xl border border-gray-100 text-blue-600 shadow-sm">
-                                    <Shield size={20} />
-                                  </div>
-                                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                                    <button 
-                                      onClick={() => {
-                                        setEditingRole(r);
-                                        setIsRoleModalOpen(true);
-                                      }}
-                                      className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                                    >
-                                      <Edit2 size={14} />
-                                    </button>
-                                    <button 
-                                      onClick={() => handleDeleteRole(r.id)}
-                                      className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
-                                    >
-                                      <Trash2 size={14} />
-                                    </button>
-                                  </div>
-                                </div>
-                                <h4 className="font-bold text-gray-900 mb-1">{r.name}</h4>
-                                <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-4">
-                                  {Object.values(r.permissions || {}).filter(Boolean).length} Permissions Active
-                                </p>
-                                <div className="flex flex-wrap gap-1.5">
-                                  {Object.entries(r.permissions || {})
-                                    .filter(([_, val]) => val)
-                                    .slice(0, 3)
-                                    .map(([key]) => (
-                                      <span key={key} className="px-2 py-0.5 bg-white border border-gray-100 text-[9px] text-gray-500 rounded-md capitalize">
-                                        {key.replace(/([A-Z])/g, ' $1').trim()}
-                                      </span>
-                                    ))}
-                                  {Object.values(r.permissions || {}).filter(Boolean).length > 3 && (
-                                    <span className="px-2 py-0.5 bg-white border border-gray-100 text-[9px] text-gray-500 rounded-md">
-                                      +{Object.values(r.permissions || {}).filter(Boolean).length - 3} more
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
+                    <div className="space-y-6">
+                      <div className="flex justify-between items-center">
+                        <h3 className="font-bold text-lg">Role Management</h3>
+                        <button 
+                          onClick={() => {
+                            setEditingRole(null);
+                            setIsRoleModalOpen(true);
+                          }}
+                          className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors shadow-sm"
+                        >
+                          <Plus size={18} />
+                          Create Role
+                        </button>
                       </div>
-                    </PermissionGuard>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {roles.map((role) => (
+                          <div key={role.id} className="p-6 border border-gray-100 rounded-2xl bg-gray-50/50 hover:border-blue-200 transition-all group">
+                            <div className="flex justify-between items-start mb-4">
+                              <h4 className="font-bold text-gray-900 group-hover:text-blue-600">{role.name}</h4>
+                              <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <button 
+                                  onClick={() => {
+                                    setEditingRole(role);
+                                    setIsRoleModalOpen(true);
+                                  }}
+                                  className="p-1 hover:bg-blue-100 rounded text-blue-600"
+                                >
+                                  <Edit2 size={14} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteRole(role.id)}
+                                  className="p-1 hover:bg-red-100 rounded text-red-600"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              </div>
+                            </div>
+                            <div className="space-y-2">
+                              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest">Permissions</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {Object.entries(role.permissions)
+                                  .filter(([_, value]) => value === true)
+                                  .slice(0, 4)
+                                  .map(([key]) => (
+                                    <span key={key} className="px-2 py-0.5 bg-white border border-gray-200 rounded text-[10px] text-gray-500 capitalize">
+                                      {key.replace('can_', '').replace(/_/g, ' ')}
+                                    </span>
+                                  ))
+                                }
+                                {Object.values(role.permissions).filter(v => v === true).length > 4 && (
+                                  <span className="px-2 py-0.5 bg-white border border-gray-200 rounded text-[10px] text-gray-500">
+                                    +{Object.values(role.permissions).filter(v => v === true).length - 4} more
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   )}
 
                   {settingsSubTab === 'devices' && (
@@ -2315,213 +2169,6 @@ function AppContent() {
         </div>
       </main>
       <AnimatePresence>
-        {isUserModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setIsUserModalOpen(false)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden"
-            >
-              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <h3 className="text-xl font-bold">{editingUser?.id ? 'Edit User' : 'Add New User'}</h3>
-                <button onClick={() => setIsUserModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                  <X size={24} />
-                </button>
-              </div>
-              
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Full Name</label>
-                  <input 
-                    type="text"
-                    placeholder="John Doe"
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
-                    value={editingUser?.name || ''}
-                    onChange={(e) => setEditingUser(prev => ({ ...prev, name: e.target.value } as any))}
-                  />
-                </div>
-                {!editingUser?.id && (
-                  <>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Email Address</label>
-                      <input 
-                        type="email"
-                        placeholder="john@example.com"
-                        className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
-                        value={editingUser?.email || ''}
-                        onChange={(e) => setEditingUser(prev => ({ ...prev, email: e.target.value } as any))}
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Password</label>
-                      <input 
-                        type="password"
-                        placeholder="Min 6 characters"
-                        className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
-                        value={editingUser?.password || ''}
-                        onChange={(e) => setEditingUser(prev => ({ ...prev, password: e.target.value } as any))}
-                      />
-                    </div>
-                  </>
-                )}
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Assign Role</label>
-                  <select 
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all bg-white"
-                    value={editingUser?.roleId || ''}
-                    onChange={(e) => setEditingUser(prev => ({ ...prev, roleId: e.target.value } as any))}
-                  >
-                    <option value="">Select a role</option>
-                    {roles.map(r => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="p-6 bg-gray-50 flex gap-3">
-                <button 
-                  onClick={() => setIsUserModalOpen(false)}
-                  className="flex-1 px-4 py-2.5 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-all"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={async () => {
-                    if (editingUser?.id) {
-                      await handleSaveUser(editingUser);
-                    } else {
-                      if (!editingUser?.email || !editingUser?.password || !editingUser?.roleId || !editingUser?.name) {
-                        toast.error('Please fill all fields');
-                        return;
-                      }
-                      await handleSaveUser({
-                        name: editingUser.name,
-                        email: editingUser.email,
-                        password: editingUser.password,
-                        roleId: editingUser.roleId
-                      });
-                    }
-                    setIsUserModalOpen(false);
-                  }}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
-                >
-                  {editingUser?.id ? 'Update User' : 'Create User'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
-        {isRoleModalOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
-              onClick={() => setIsRoleModalOpen(false)}
-            />
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-white rounded-2xl shadow-2xl w-full max-w-lg relative z-10 overflow-hidden"
-            >
-              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <h3 className="text-xl font-bold">{editingRole?.id ? 'Edit Role' : 'Create New Role'}</h3>
-                <button onClick={() => setIsRoleModalOpen(false)} className="text-gray-400 hover:text-gray-600">
-                  <X size={24} />
-                </button>
-              </div>
-              
-              <div className="p-6 space-y-6 max-h-[70vh] overflow-y-auto custom-scrollbar">
-                <div>
-                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Role Name</label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. Content Manager"
-                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all"
-                    value={editingRole?.name || ''}
-                    onChange={(e) => setEditingRole(prev => ({ ...prev, name: e.target.value, permissions: prev?.permissions || {} } as any))}
-                  />
-                </div>
-
-                <div className="space-y-4">
-                  <label className="block text-xs font-bold text-gray-400 uppercase tracking-widest">Permissions</label>
-                  <div className="grid grid-cols-1 gap-3">
-                    {[
-                      { key: 'viewProducts', label: 'View Products' },
-                      { key: 'seeBuyingPrice', label: 'See Buying Price' },
-                      { key: 'editProducts', label: 'Edit Products' },
-                      { key: 'viewContentPlan', label: 'View Content Plan' },
-                      { key: 'editContentPlan', label: 'Edit Content Plan' },
-                      { key: 'viewAdsPlan', label: 'View Ads Plan' },
-                      { key: 'editAdsPlan', label: 'Edit Ads Plan' },
-                      { key: 'manageUsers', label: 'Manage Users' },
-                    ].map((perm) => (
-                      <div key={perm.key} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                        <span className="text-sm font-bold text-gray-700">{perm.label}</span>
-                        <button
-                          onClick={() => {
-                            const currentPerms = editingRole?.permissions || {};
-                            setEditingRole(prev => ({
-                              ...prev!,
-                              permissions: {
-                                ...currentPerms,
-                                [perm.key]: !currentPerms[perm.key as keyof Role['permissions']]
-                              }
-                            }));
-                          }}
-                          className={cn(
-                            "w-12 h-6 rounded-full transition-all relative",
-                            editingRole?.permissions?.[perm.key as keyof Role['permissions']] ? "bg-blue-600" : "bg-gray-200"
-                          )}
-                        >
-                          <div className={cn(
-                            "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
-                            editingRole?.permissions?.[perm.key as keyof Role['permissions']] ? "left-7" : "left-1"
-                          )} />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-6 bg-gray-50 flex gap-3">
-                <button 
-                  onClick={() => setIsRoleModalOpen(false)}
-                  className="flex-1 px-4 py-2.5 rounded-xl font-bold text-gray-500 hover:bg-gray-100 transition-all"
-                >
-                  Cancel
-                </button>
-                <button 
-                  onClick={async () => {
-                    if (!editingRole?.name) {
-                      toast.error('Role name is required');
-                      return;
-                    }
-                    await handleSaveRole(editingRole);
-                    setIsRoleModalOpen(false);
-                  }}
-                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100"
-                >
-                  {editingRole?.id ? 'Update Role' : 'Create Role'}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
         {isAddModalOpen && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
             <motion.div 
@@ -2559,18 +2206,16 @@ function AppContent() {
 
                 {/* Prices Grid */}
                 <div className="grid grid-cols-2 gap-4">
-                  <PermissionGuard permission="seeBuyingPrice">
-                    <div>
-                      <label className="block text-sm font-bold text-gray-700 mb-2">Buying Price (৳)</label>
-                      <input 
-                        type="number"
-                        placeholder="0.00"
-                        className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                        value={newProduct.buyingPrice}
-                        onChange={(e) => setNewProduct({...newProduct, buyingPrice: e.target.value})}
-                      />
-                    </div>
-                  </PermissionGuard>
+                  <div>
+                    <label className="block text-sm font-bold text-gray-700 mb-2">Buying Price (৳)</label>
+                    <input 
+                      type="number"
+                      placeholder="0.00"
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                      value={newProduct.buyingPrice}
+                      onChange={(e) => setNewProduct({...newProduct, buyingPrice: e.target.value})}
+                    />
+                  </div>
                   <div>
                     <label className="block text-sm font-bold text-gray-700 mb-2">Selling Price (৳)</label>
                     <input 
@@ -2586,13 +2231,23 @@ function AppContent() {
                 {/* Website Link */}
                 <div>
                   <label className="block text-sm font-bold text-gray-700 mb-2">Product Website Link</label>
-                  <input 
-                    type="url"
-                    placeholder="https://example.com/product"
-                    className="w-full px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
-                    value={newProduct.websiteLink}
-                    onChange={(e) => setNewProduct({...newProduct, websiteLink: e.target.value})}
-                  />
+                  <div className="flex gap-2">
+                    <input 
+                      type="url"
+                      placeholder="https://example.com/product"
+                      className="flex-1 px-4 py-2.5 rounded-lg border border-gray-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none transition-all"
+                      value={newProduct.websiteLink}
+                      onChange={(e) => setNewProduct({...newProduct, websiteLink: e.target.value})}
+                    />
+                    <button 
+                      onClick={fetchProductInfo}
+                      disabled={isFetching || !newProduct.websiteLink}
+                      className="px-4 py-2.5 bg-white border border-gray-200 rounded-lg text-gray-600 font-medium hover:bg-gray-50 flex items-center gap-2 transition-colors disabled:opacity-50"
+                    >
+                      {isFetching ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} className="text-blue-500" />}
+                      Fetch Info
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -2757,6 +2412,181 @@ function AppContent() {
                     Open Original <ExternalLink size={12} />
                   </a>
                 </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* User Modal */}
+      <AnimatePresence>
+        {isUserModalOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setIsUserModalOpen(false)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-md relative z-10 overflow-hidden"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-blue-600 text-white">
+                <h3 className="text-xl font-bold">{editingUser ? 'Edit User' : 'Add New User'}</h3>
+                <button onClick={() => setIsUserModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <form onSubmit={(e) => {
+                e.preventDefault();
+                const formData = new FormData(e.currentTarget);
+                handleSaveUser({
+                  name: formData.get('name'),
+                  email: formData.get('email'),
+                  roleId: formData.get('roleId'),
+                });
+              }} className="p-6 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Full Name</label>
+                  <input 
+                    name="name"
+                    type="text" 
+                    required
+                    defaultValue={editingUser?.name}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
+                    placeholder="Enter user's full name"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Email Address</label>
+                  <input 
+                    name="email"
+                    type="email" 
+                    required
+                    defaultValue={editingUser?.email}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium"
+                    placeholder="user@demarkt.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Role</label>
+                  <select 
+                    name="roleId"
+                    required
+                    defaultValue={editingUser?.roleId || roles[0]?.id}
+                    className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-medium bg-white"
+                  >
+                    {roles.map(role => (
+                      <option key={role.id} value={role.id}>{role.name}</option>
+                    ))}
+                  </select>
+                </div>
+                
+                <div className="pt-4 flex gap-3">
+                  <button 
+                    type="button"
+                    onClick={() => setIsUserModalOpen(false)}
+                    className="flex-1 px-6 py-3 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-md"
+                  >
+                    {editingUser ? 'Save Changes' : 'Create User'}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Role Modal */}
+      <AnimatePresence>
+        {isRoleModalOpen && (
+          <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              onClick={() => setIsRoleModalOpen(false)}
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl relative z-10 overflow-hidden max-h-[90vh] flex flex-col"
+            >
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-blue-600 text-white">
+                <h3 className="text-xl font-bold">{editingRole ? 'Edit Role' : 'Create New Role'}</h3>
+                <button onClick={() => setIsRoleModalOpen(false)} className="p-2 hover:bg-white/10 rounded-full transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="p-6 overflow-y-auto flex-1">
+                <div className="space-y-6">
+                  <div className="space-y-2">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest">Role Name</label>
+                    <input 
+                      id="role-name"
+                      type="text" 
+                      required
+                      defaultValue={editingRole?.name}
+                      className="w-full px-4 py-2.5 rounded-xl border border-gray-200 outline-none focus:ring-2 focus:ring-blue-100 transition-all font-bold text-lg"
+                      placeholder="e.g. Marketing Manager"
+                    />
+                  </div>
+
+                  <div className="space-y-4">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-widest block">Permissions</label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      {Object.keys(editingRole?.permissions || roles[0]?.permissions || {}).map((permission) => (
+                        <label key={permission} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl hover:bg-gray-50 cursor-pointer transition-colors">
+                          <input 
+                            type="checkbox" 
+                            className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            defaultChecked={editingRole?.permissions[permission as keyof typeof editingRole.permissions]}
+                            id={`perm-${permission}`}
+                          />
+                          <span className="text-sm font-medium text-gray-700 capitalize">
+                            {permission.replace('can_', '').replace(/_/g, ' ')}
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="p-6 border-t border-gray-100 bg-gray-50 flex gap-3">
+                <button 
+                  onClick={() => setIsRoleModalOpen(false)}
+                  className="flex-1 px-6 py-3 rounded-xl border border-gray-200 font-bold text-gray-600 hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => {
+                    const name = (document.getElementById('role-name') as HTMLInputElement).value;
+                    const permissions: any = {};
+                    Object.keys(editingRole?.permissions || roles[0]?.permissions || {}).forEach(p => {
+                      permissions[p] = (document.getElementById(`perm-${p}`) as HTMLInputElement).checked;
+                    });
+                    handleSaveRole({ name, permissions });
+                  }}
+                  className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-colors shadow-md"
+                >
+                  {editingRole ? 'Save Changes' : 'Create Role'}
+                </button>
               </div>
             </motion.div>
           </div>

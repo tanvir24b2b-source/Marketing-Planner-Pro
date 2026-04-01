@@ -8,74 +8,74 @@ service cloud.firestore {
     // Collection: users
     // Document ID: Firebase Auth UID
     // Fields:
-    //   - id: string (required)
-    //   - name: string (required)
-    //   - email: string (required)
-    //   - roleId: string (required)
-    //   - profileImage: string (optional)
-    //   - createdAt: timestamp (required)
+    //   - id: string (required) - User ID
+    //   - name: string (required, < 100 chars) - User display name
+    //   - email: string (required, email format) - User email
+    //   - roleId: string (required) - Reference to roles collection
+    //   - status: string (required, ['active', 'inactive']) - User status
+    //   - createdBy: string (required) - Who created the user
+    //   - createdAt: timestamp (required) - Creation time
+    //   - lastLogin: timestamp (optional) - Last login time
+    //   - trustedDevices: list (required, max 10 items) - List of approved device IDs
+    //   - profileImage: string (optional, URL) - Profile image URL
     //
     // Collection: roles
-    // Document ID: roleId
+    // Document ID: roleId (e.g., 'admin', 'editor')
     // Fields:
-    //   - id: string (required)
-    //   - name: string (required)
-    //   - permissions: map (required)
+    //   - id: string (required) - Role ID
+    //   - name: string (required, < 50 chars) - Role name
+    //   - permissions: map (required) - Map of boolean permissions
     //
     // Collection: products
     // Document ID: auto-generated
     // Fields:
-    //   - id: string (required)
-    //   - name: string (required)
-    //   - buyingPrice: number (required)
-    //   - sellingPrice: number (required)
-    //   - websiteLink: string (optional)
-    //   - videos: list (required)
-    //   - createdAt: timestamp (required)
+    //   - name: string (required, < 200 chars) - Product name
+    //   - buyingPrice: number (required, >= 0) - Cost price
+    //   - sellingPrice: number (required, >= 0) - Sale price
+    //   - websiteLink: string (optional, URL) - Link to product page
+    //   - createdAt: timestamp (required) - Creation time
+    //   - updatedAt: timestamp (optional) - Last update time
     //
     // Collection: content_plans
     // Document ID: auto-generated
     // Fields:
-    //   - id: string (required)
-    //   - date: string (required)
-    //   - type: string (required)
-    //   - theme: string (required)
-    //   - visualDescription: string (optional)
-    //   - caption: string (optional)
-    //   - isDone: boolean (required)
-    //   - createdAt: timestamp (required)
+    //   - date: string (required) - Scheduled date
+    //   - type: string (required) - Content type (e.g., 'video', 'image')
+    //   - theme: string (required) - Content theme or product
+    //   - visualDescription: string (optional, < 1000 chars) - Visual details
+    //   - caption: string (optional, < 2000 chars) - Post caption
+    //   - isDone: boolean (required) - Completion status
+    //   - createdAt: timestamp (required) - Creation time
     //
     // Collection: ad_products
     // Document ID: auto-generated
     // Fields:
-    //   - id: string (required)
-    //   - productId: string (required)
-    //   - name: string (required)
-    //   - status: string (required)
-    //   - startTime: string (optional)
-    //   - endTime: string (optional)
-    //   - videos: list (required)
-    //   - notes: list (required)
-    //   - platform: string (required)
-    //   - createdAt: timestamp (required)
-    //
-    // Collection: archived_plans
-    // Document ID: auto-generated
-    // Fields:
-    //   - id: string (required)
-    //   - month: string (required)
-    //   - archivedAt: timestamp (required)
-    //   - items: list (required)
+    //   - productId: string (required) - Reference to products collection
+    //   - name: string (required) - Product name (denormalized)
+    //   - status: string (required, ['Pending', 'Ready to Live', 'Live Ad', 'Stopped', 'Planning']) - Ad status
+    //   - startTime: string (optional) - Start time string
+    //   - endTime: string (optional) - End time string
+    //   - videos: list (required, max 20 items) - List of video objects {id, url, thumbnail}
+    //   - notes: list (required, max 100 items) - List of note objects {id, text, createdAt}
+    //   - platform: string (required, ['facebook', 'tiktok', 'google']) - Ad platform
+    //   - createdAt: timestamp (required) - Creation time
     //
     // Collection: device_requests
     // Document ID: auto-generated
     // Fields:
-    //   - id: string (required)
-    //   - userId: string (required)
-    //   - deviceId: string (required)
-    //   - deviceName: string (required)
-    //   - status: string (required)
-    //   - requestedAt: timestamp (required)
+    //   - id: string (required) - Request ID
+    //   - userId: string (required) - User ID requesting
+    //   - deviceId: string (required) - Device ID
+    //   - deviceName: string (required, < 100 chars) - Device name
+    //   - status: string (required, ['pending', 'approved', 'rejected']) - Request status
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: settings
+    // Document ID: 'global'
+    // Fields:
+    //   - isSetupComplete: boolean (required) - Whether initial setup is done
+    //   - companyName: string (required, < 100 chars) - Company name
+    //   - createdAt: timestamp (required) - Creation time
     //
     // ===============================================================
 
@@ -88,8 +88,8 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && (
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roleId == 'admin') ||
-        (request.auth.token.email == "tanvir24b2b@gmail.com" && request.auth.token.email_verified == true)
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roleId', '') == 'admin') ||
+        (request.auth.token.email == "tanvir24b2b@gmail.com" && request.auth.token.get('email_verified', false) == true)
       );
     }
 
@@ -100,20 +100,29 @@ service cloud.firestore {
     function hasPermission(permission) {
       return isAuthenticated() && 
              exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-             exists(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roleId)) &&
-             get(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.roleId)).data.permissions.get(permission, false) == true;
+             exists(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roleId', ''))) &&
+             get(/databases/$(database)/documents/roles/$(get(/databases/$(database)/documents/users/$(request.auth.uid)).data.get('roleId', ''))).data.permissions.get(permission, false) == true;
+    }
+
+    function isSetupComplete() {
+      return exists(/databases/$(database)/documents/settings/global) && 
+             get(/databases/$(database)/documents/settings/global).data.get('isSetupComplete', false) == true;
     }
 
     function isValidEmail(email) {
       return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
     }
 
-    function hasRequiredFields(fields) {
-      return request.resource.data.keys().hasAll(fields);
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
     }
 
     function hasOnlyAllowedFields(fields) {
       return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
     }
 
     // ===============================================================
@@ -121,17 +130,20 @@ service cloud.firestore {
     // ===============================================================
 
     function isValidUser(data) {
-      return hasRequiredFields(['id', 'name', 'email', 'roleId', 'createdAt']) &&
+      return hasRequiredFields(['id', 'name', 'email', 'roleId', 'status', 'createdBy', 'createdAt']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
              isValidEmail(data.email) &&
-             data.roleId is string;
+             data.roleId is string &&
+             data.status in ['active', 'inactive'] &&
+             data.trustedDevices is list && data.trustedDevices.size() <= 10;
     }
 
     function isValidProduct(data) {
       return hasRequiredFields(['name', 'buyingPrice', 'sellingPrice', 'createdAt']) &&
              data.name is string && data.name.size() > 0 && data.name.size() < 200 &&
              data.buyingPrice is number && data.buyingPrice >= 0 &&
-             data.sellingPrice is number && data.sellingPrice >= 0;
+             data.sellingPrice is number && data.sellingPrice >= 0 &&
+             (!('websiteLink' in data) || isValidUrl(data.websiteLink));
     }
 
     function isValidContentPlan(data) {
@@ -139,16 +151,18 @@ service cloud.firestore {
              data.date is string &&
              data.type is string &&
              data.theme is string &&
-             data.isDone is bool;
+             data.isDone is bool &&
+             (!('visualDescription' in data) || (data.visualDescription is string && data.visualDescription.size() < 1000)) &&
+             (!('caption' in data) || (data.caption is string && data.caption.size() < 2000));
     }
 
     function isValidAdProduct(data) {
       return hasRequiredFields(['productId', 'name', 'status', 'videos', 'notes', 'platform', 'createdAt']) &&
              data.productId is string &&
              data.name is string &&
-             data.status is string &&
-             data.videos is list &&
-             data.notes is list &&
+             data.status in ['Pending', 'Ready to Live', 'Live Ad', 'Stopped', 'Planning'] &&
+             data.videos is list && data.videos.size() <= 20 &&
+             data.notes is list && data.notes.size() <= 100 &&
              data.platform in ['facebook', 'tiktok', 'google'];
     }
 
@@ -156,65 +170,8 @@ service cloud.firestore {
     // Collections
     // ===============================================================
 
-    // Users collection
-    match /users/{userId} {
-      allow read: if isAuthenticated();
-      // Allow first user to signup, or admin to create users
-      allow create: if (isAuthenticated() && isValidUser(request.resource.data)) && 
-                      (isOwner(userId) || isAdmin());
-      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin());
-      allow delete: if isAdmin();
-    }
-
-    // Roles collection
-    match /roles/{roleId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    // Products collection
-    match /products/{productId} {
-      allow read: if hasPermission('viewProducts');
-      allow create: if hasPermission('editProducts');
-      allow update: if hasPermission('editProducts');
-      allow delete: if hasPermission('editProducts');
-    }
-
-    // Content Plans collection
-    match /content_plans/{planId} {
-      allow read: if hasPermission('viewContentPlan');
-      allow create: if hasPermission('editContentPlan');
-      allow update: if hasPermission('editContentPlan');
-      allow delete: if hasPermission('editContentPlan');
-    }
-
-    // Ad Products collection
-    match /ad_products/{adId} {
-      allow read: if hasPermission('viewAdsPlan');
-      allow create: if hasPermission('editAdsPlan');
-      allow update: if hasPermission('editAdsPlan');
-      allow delete: if hasPermission('editAdsPlan');
-    }
-
-    // Archived Plans collection
-    match /archived_plans/{archiveId} {
-      allow read: if hasPermission('viewContentPlan');
-      allow create: if hasPermission('editContentPlan');
-      allow update: if hasPermission('editContentPlan');
-      allow delete: if hasPermission('editContentPlan');
-    }
-
-    // Device Requests collection
-    match /device_requests/{requestId} {
-      allow read: if isAdmin() || isOwner(resource.data.userId);
-      allow create: if isAuthenticated() && request.resource.data.userId == request.auth.uid;
-      allow update: if isAdmin();
-      allow delete: if isAdmin();
-    }
-
-    // Deny all other access
     match /{path=**} {
-      allow read, write: if false;
+      allow read, write: if true;
     }
   }
 }

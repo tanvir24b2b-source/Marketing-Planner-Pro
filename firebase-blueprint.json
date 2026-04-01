@@ -2,17 +2,21 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "System user profile",
+      "description": "System user with role and device information",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
         "name": { "type": "string" },
         "email": { "type": "string", "format": "email" },
         "roleId": { "type": "string" },
-        "profileImage": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" }
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "lastLogin": { "type": "string", "format": "date-time" },
+        "trustedDevices": { "type": "array", "items": { "type": "string" } },
+        "profileImage": { "type": "string" }
       },
-      "required": ["id", "name", "email", "roleId"]
+      "required": ["id", "name", "email", "roleId", "status"]
     },
     "Role": {
       "title": "Role",
@@ -24,18 +28,38 @@
         "permissions": {
           "type": "object",
           "properties": {
-            "viewProducts": { "type": "boolean" },
-            "seeBuyingPrice": { "type": "boolean" },
-            "editProducts": { "type": "boolean" },
-            "viewContentPlan": { "type": "boolean" },
-            "editContentPlan": { "type": "boolean" },
-            "viewAdsPlan": { "type": "boolean" },
-            "editAdsPlan": { "type": "boolean" },
-            "manageUsers": { "type": "boolean" }
+            "can_view_dashboard": { "type": "boolean" },
+            "can_view_products": { "type": "boolean" },
+            "can_add_products": { "type": "boolean" },
+            "can_edit_products": { "type": "boolean" },
+            "can_delete_products": { "type": "boolean" },
+            "can_view_buying_price": { "type": "boolean" },
+            "can_view_ads_plan": { "type": "boolean" },
+            "can_edit_ads_plan": { "type": "boolean" },
+            "can_view_content_plan": { "type": "boolean" },
+            "can_edit_content_plan": { "type": "boolean" },
+            "can_manage_users": { "type": "boolean" },
+            "can_manage_roles": { "type": "boolean" },
+            "can_manage_settings": { "type": "boolean" },
+            "can_approve_devices": { "type": "boolean" }
           }
         }
       },
       "required": ["id", "name", "permissions"]
+    },
+    "DeviceRequest": {
+      "title": "Device Request",
+      "description": "Requests for device approval",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "userId", "deviceId", "status"]
     },
     "Product": {
       "title": "Product",
@@ -47,10 +71,8 @@
         "buyingPrice": { "type": "number" },
         "sellingPrice": { "type": "number" },
         "websiteLink": { "type": "string" },
-        "videos": { "type": "array" },
         "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["name", "buyingPrice", "sellingPrice", "createdAt"]
+      }
     },
     "ContentPlan": {
       "title": "Content Plan",
@@ -65,8 +87,7 @@
         "caption": { "type": "string" },
         "isDone": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["date", "type", "theme", "isDone", "createdAt"]
+      }
     },
     "AdProduct": {
       "title": "Ad Product",
@@ -83,34 +104,18 @@
         "notes": { "type": "array" },
         "platform": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["productId", "name", "status", "videos", "notes", "platform", "createdAt"]
+      }
     },
-    "ArchivedPlan": {
-      "title": "Archived Plan",
-      "description": "Historical content plans",
+    "AppSetting": {
+      "title": "App Setting",
+      "description": "Global application settings",
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "month": { "type": "string" },
-        "archivedAt": { "type": "string", "format": "date-time" },
-        "items": { "type": "array" }
-      },
-      "required": ["month", "archivedAt", "items"]
-    },
-    "DeviceRequest": {
-      "title": "Device Request",
-      "description": "Requests for device approval",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "userId": { "type": "string" },
-        "deviceId": { "type": "string" },
-        "deviceName": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
-        "requestedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["userId", "deviceId", "status", "requestedAt"]
+        "companyName": { "type": "string" },
+        "companyLogo": { "type": "string" },
+        "isSetupComplete": { "type": "boolean" }
+      }
     }
   },
   "firestore": {
@@ -121,6 +126,10 @@
     "/roles/{roleId}": {
       "schema": "Role",
       "description": "User roles and permissions"
+    },
+    "/device_requests/{requestId}": {
+      "schema": "DeviceRequest",
+      "description": "Device approval requests"
     },
     "/products/{productId}": {
       "schema": "Product",
@@ -134,13 +143,9 @@
       "schema": "AdProduct",
       "description": "Ad campaigns"
     },
-    "/archived_plans/{archiveId}": {
-      "schema": "ArchivedPlan",
-      "description": "Archived content plans"
-    },
-    "/device_requests/{requestId}": {
-      "schema": "DeviceRequest",
-      "description": "Device approval requests"
+    "/settings/{settingId}": {
+      "schema": "AppSetting",
+      "description": "Global settings"
     }
   }
 }

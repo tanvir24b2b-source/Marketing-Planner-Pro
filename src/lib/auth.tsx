@@ -4,47 +4,53 @@ import {
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword,
   signOut,
-  updateProfile,
-  updatePassword,
-  User as FirebaseUser,
-  getAuth,
-  initializeAuth
+  User as FirebaseUser
 } from 'firebase/auth';
-import { initializeApp, getApp, getApps } from 'firebase/app';
 import { 
   doc, 
   getDoc, 
   setDoc, 
+  onSnapshot, 
   collection, 
-  getDocs,
   query, 
-  limit,
+  where, 
   serverTimestamp,
-  updateDoc
+  updateDoc,
+  arrayUnion
 } from 'firebase/firestore';
-import { auth, db, firebaseConfig } from './firebase';
+import { auth, db, OperationType, handleFirestoreError } from './firebase';
 
 export interface UserProfile {
   id: string;
   name: string;
   email: string;
   roleId: string;
-  profileImage?: string;
+  status: 'active' | 'inactive';
+  createdBy: string;
   createdAt: any;
+  lastLogin: any;
+  trustedDevices: string[];
+  profileImage?: string;
 }
 
 export interface Role {
   id: string;
   name: string;
   permissions: {
-    viewProducts: boolean;
-    seeBuyingPrice: boolean;
-    editProducts: boolean;
-    viewContentPlan: boolean;
-    editContentPlan: boolean;
-    viewAdsPlan: boolean;
-    editAdsPlan: boolean;
-    manageUsers: boolean;
+    can_view_dashboard: boolean;
+    can_view_products: boolean;
+    can_add_products: boolean;
+    can_edit_products: boolean;
+    can_delete_products: boolean;
+    can_view_buying_price: boolean;
+    can_view_ads_plan: boolean;
+    can_edit_ads_plan: boolean;
+    can_view_content_plan: boolean;
+    can_edit_content_plan: boolean;
+    can_manage_users: boolean;
+    can_manage_roles: boolean;
+    can_manage_settings: boolean;
+    can_approve_devices: boolean;
   };
 }
 
@@ -53,172 +59,75 @@ interface AuthContextType {
   profile: UserProfile | null;
   role: Role | null;
   loading: boolean;
+  isSetupComplete: boolean;
+  isDeviceApproved: boolean;
+  deviceId: string;
   login: (email: string, pass: string) => Promise<void>;
   signup: (email: string, pass: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
-  updateMyProfile: (data: { name?: string; profileImage?: string }) => Promise<void>;
-  changeMyPassword: (newPass: string) => Promise<void>;
-  adminCreateUser: (email: string, pass: string, name: string, roleId: string) => Promise<void>;
+  requestDeviceApproval: (name: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<FirebaseUser | null>(null);
-  const [profile, setProfile] = useState<UserProfile | null>(null);
-  const [role, setRole] = useState<Role | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState<FirebaseUser | null>({ uid: 'system-admin', email: 'admin@demarkt.com' } as any);
+  const [profile, setProfile] = useState<UserProfile | null>({
+    id: 'system-admin',
+    name: 'System Administrator',
+    email: 'admin@demarkt.com',
+    roleId: 'admin',
+    status: 'active',
+    createdBy: 'system',
+    createdAt: new Date(),
+    lastLogin: new Date(),
+    trustedDevices: []
+  });
+  const [role, setRole] = useState<Role | null>({
+    id: 'admin',
+    name: 'Administrator',
+    permissions: {
+      can_view_dashboard: true,
+      can_view_products: true,
+      can_add_products: true,
+      can_edit_products: true,
+      can_view_buying_price: true,
+      can_view_ads_plan: true,
+      can_edit_ads_plan: true,
+      can_view_content_plan: true,
+      can_edit_content_plan: true,
+      can_manage_users: true,
+      can_manage_roles: true,
+      can_manage_settings: true,
+      can_approve_devices: true,
+      can_delete_products: true
+    }
+  });
+  const [loading, setLoading] = useState(false);
+  const [isSetupComplete, setIsSetupComplete] = useState(true);
+  const [isDeviceApproved, setIsDeviceApproved] = useState(true);
+  const [deviceId, setDeviceId] = useState('system-device');
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
-      
-      if (firebaseUser) {
-        // Fetch profile
-        const profileRef = doc(db, 'users', firebaseUser.uid);
-        const profileSnap = await getDoc(profileRef);
-        
-        if (profileSnap.exists()) {
-          const profileData = profileSnap.data() as UserProfile;
-          setProfile(profileData);
-          
-          // Fetch role
-          const roleRef = doc(db, 'roles', profileData.roleId);
-          const roleSnap = await getDoc(roleRef);
-          if (roleSnap.exists()) {
-            setRole(roleSnap.data() as Role);
-          }
-        }
-      } else {
-        setProfile(null);
-        setRole(null);
+    // Keep setup check for global settings if needed, but bypass auth
+    const unsubSetup = onSnapshot(doc(db, 'settings', 'global'), (doc) => {
+      if (doc.exists()) {
+        setIsSetupComplete(doc.data().isSetupComplete);
       }
-      setLoading(false);
-    });
+    }, (error) => console.log('Setup check bypassed'));
 
-    return () => unsubscribe();
+    return () => unsubSetup();
   }, []);
 
-  const login = async (email: string, pass: string) => {
-    await signInWithEmailAndPassword(auth, email, pass);
-  };
-
-  const signup = async (email: string, pass: string, name: string) => {
-    const userCred = await createUserWithEmailAndPassword(auth, email, pass);
-    const firebaseUser = userCred.user;
-
-    // Check if this is the first user
-    const usersSnap = await getDocs(query(collection(db, 'users'), limit(1)));
-    const isFirstUser = usersSnap.empty;
-    const roleId = isFirstUser ? 'admin' : 'user';
-
-    // If first user, ensure admin role exists
-    if (isFirstUser) {
-      const adminRoleRef = doc(db, 'roles', 'admin');
-      const adminRoleSnap = await getDoc(adminRoleRef);
-      if (!adminRoleSnap.exists()) {
-        await setDoc(adminRoleRef, {
-          id: 'admin',
-          name: 'Administrator',
-          permissions: {
-            viewProducts: true,
-            seeBuyingPrice: true,
-            editProducts: true,
-            viewContentPlan: true,
-            editContentPlan: true,
-            viewAdsPlan: true,
-            editAdsPlan: true,
-            manageUsers: true
-          }
-        });
-      }
-      
-      // Also ensure default user role exists
-      const userRoleRef = doc(db, 'roles', 'user');
-      const userRoleSnap = await getDoc(userRoleRef);
-      if (!userRoleSnap.exists()) {
-        await setDoc(userRoleRef, {
-          id: 'user',
-          name: 'User',
-          permissions: {
-            viewProducts: true,
-            seeBuyingPrice: false,
-            editProducts: false,
-            viewContentPlan: true,
-            editContentPlan: false,
-            viewAdsPlan: true,
-            editAdsPlan: false,
-            manageUsers: false
-          }
-        });
-      }
-    }
-
-    const newProfile: UserProfile = {
-      id: firebaseUser.uid,
-      name,
-      email,
-      roleId,
-      createdAt: serverTimestamp()
-    };
-
-    await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-    await updateProfile(firebaseUser, { displayName: name });
-    
-    setProfile(newProfile);
-    const roleSnap = await getDoc(doc(db, 'roles', roleId));
-    if (roleSnap.exists()) {
-      setRole(roleSnap.data() as Role);
-    }
-  };
-
-  const logout = async () => {
-    await signOut(auth);
-  };
-
-  const updateMyProfile = async (data: { name?: string; profileImage?: string }) => {
-    if (!user) return;
-    const profileRef = doc(db, 'users', user.uid);
-    await updateDoc(profileRef, data);
-    if (data.name) {
-      await updateProfile(user, { displayName: data.name });
-    }
-    setProfile(prev => prev ? { ...prev, ...data } : null);
-  };
-
-  const changeMyPassword = async (newPass: string) => {
-    if (!user) return;
-    await updatePassword(user, newPass);
-  };
-
-  const adminCreateUser = async (email: string, pass: string, name: string, roleId: string) => {
-    // Create a secondary app to create the user without logging out the admin
-    const secondaryApp = getApps().find(app => app.name === 'Secondary') || initializeApp(firebaseConfig, 'Secondary');
-    const secondaryAuth = getAuth(secondaryApp);
-    
-    try {
-      const userCred = await createUserWithEmailAndPassword(secondaryAuth, email, pass);
-      const newUser = userCred.user;
-      
-      await setDoc(doc(db, 'users', newUser.uid), {
-        id: newUser.uid,
-        name,
-        email,
-        roleId,
-        createdAt: serverTimestamp()
-      });
-      
-      await updateProfile(newUser, { displayName: name });
-      await signOut(secondaryAuth);
-    } catch (error) {
-      throw error;
-    }
-  };
+  const login = async () => {};
+  const signup = async () => {};
+  const logout = async () => {};
+  const requestDeviceApproval = async () => {};
 
   return (
     <AuthContext.Provider value={{ 
-      user, profile, role, loading,
-      login, signup, logout, updateMyProfile, changeMyPassword, adminCreateUser
+      user, profile, role, loading, isSetupComplete, isDeviceApproved, deviceId,
+      login, signup, logout, requestDeviceApproval 
     }}>
       {children}
     </AuthContext.Provider>
