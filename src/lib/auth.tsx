@@ -22,8 +22,7 @@ import {
   serverTimestamp,
   updateDoc
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { auth, db, firebaseConfig } from './firebase';
 
 export interface UserProfile {
   id: string;

@@ -83,7 +83,8 @@ function cn(...inputs: ClassValue[]) {
 }
 
 // Initialize Gemini
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const geminiKey = import.meta.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+const ai = geminiKey ? new GoogleGenAI({ apiKey: geminiKey }) : null;
 
 // Test Firestore Connection
 async function testConnection() {
@@ -739,6 +740,7 @@ function AppContent() {
     }
 
     // Try to get thumbnail using Gemini for Facebook/TikTok/Instagram
+    if (!ai) return undefined;
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
@@ -943,6 +945,10 @@ function AppContent() {
   };
 
   const generateAdCopy = async (ad: AdProduct) => {
+    if (!ai) {
+      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
+      return;
+    }
     const product = products.find(p => p.id === ad.productId);
     if (!product) return;
 
@@ -977,6 +983,10 @@ function AppContent() {
   };
 
   const generateWhatsAppMessage = async (product: Product) => {
+    if (!ai) {
+      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
+      return;
+    }
     try {
       const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
@@ -999,6 +1009,10 @@ function AppContent() {
 
   const fetchProductInfo = async () => {
     if (!newProduct.websiteLink) return;
+    if (!ai) {
+      toast.error("AI features are not configured. Please add GEMINI_API_KEY to your environment variables.");
+      return;
+    }
     setIsFetching(true);
     try {
       const response = await ai.models.generateContent({
