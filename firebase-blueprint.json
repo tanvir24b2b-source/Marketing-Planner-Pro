@@ -1,0 +1,146 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "roleId": { "type": "string" },
+        "profileImage": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "email", "roleId"]
+    },
+    "Role": {
+      "title": "Role",
+      "description": "User roles and their associated permissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "viewProducts": { "type": "boolean" },
+            "seeBuyingPrice": { "type": "boolean" },
+            "editProducts": { "type": "boolean" },
+            "viewContentPlan": { "type": "boolean" },
+            "editContentPlan": { "type": "boolean" },
+            "viewAdsPlan": { "type": "boolean" },
+            "editAdsPlan": { "type": "boolean" },
+            "manageUsers": { "type": "boolean" }
+          }
+        }
+      },
+      "required": ["id", "name", "permissions"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "E-commerce product information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "buyingPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "websiteLink": { "type": "string" },
+        "videos": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "buyingPrice", "sellingPrice", "createdAt"]
+    },
+    "ContentPlan": {
+      "title": "Content Plan",
+      "description": "Social media content planning items",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" },
+        "theme": { "type": "string" },
+        "visualDescription": { "type": "string" },
+        "caption": { "type": "string" },
+        "isDone": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "type", "theme", "isDone", "createdAt"]
+    },
+    "AdProduct": {
+      "title": "Ad Product",
+      "description": "Advertising campaign for a product",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "productId": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "videos": { "type": "array" },
+        "notes": { "type": "array" },
+        "platform": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["productId", "name", "status", "videos", "notes", "platform", "createdAt"]
+    },
+    "ArchivedPlan": {
+      "title": "Archived Plan",
+      "description": "Historical content plans",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "month": { "type": "string" },
+        "archivedAt": { "type": "string", "format": "date-time" },
+        "items": { "type": "array" }
+      },
+      "required": ["month", "archivedAt", "items"]
+    },
+    "DeviceRequest": {
+      "title": "Device Request",
+      "description": "Requests for device approval",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "deviceName": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "requestedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "deviceId", "status", "requestedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/roles/{roleId}": {
+      "schema": "Role",
+      "description": "User roles and permissions"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Product inventory"
+    },
+    "/content_plans/{planId}": {
+      "schema": "ContentPlan",
+      "description": "Content planning items"
+    },
+    "/ad_products/{adId}": {
+      "schema": "AdProduct",
+      "description": "Ad campaigns"
+    },
+    "/archived_plans/{archiveId}": {
+      "schema": "ArchivedPlan",
+      "description": "Archived content plans"
+    },
+    "/device_requests/{requestId}": {
+      "schema": "DeviceRequest",
+      "description": "Device approval requests"
+    }
+  }
+}
